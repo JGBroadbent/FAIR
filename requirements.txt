@@ -1,0 +1,8 @@
+# Requirements for mybinder.org
+matplotlib
+numpy
+scipy
+pint
+sphinx>=1.4
+ipykernel
+nbsphinx
