@@ -1,45 +1,40 @@
-from __future__ import division
-
+from ..unit_def import unit
 import numpy as np
 
-def etminan(C, Cpi, F2x=3.71):
+def etminan(co2, ch4, n2o):
     """Calculate the radiative forcing from CO2, CH4 and N2O.
 
     This function uses the updated formulas of Etminan et al. (2016),
-    including the overlaps between CO2, methane and nitrous oxide.
+    (10.1002/2016GL071930) including the overlaps between CO2, methane and
+    nitrous oxide.
 
-    Reference: Etminan et al, 2016, JGR, doi: 10.1002/2016GL071930
-
-    Inputs:
-        C: [CO2, CH4, N2O] concentrations, [ppm, ppb, ppb]
-        Cpi: pre-industrial [CO2, CH4, N2O] concentrations
-
-    Keywords:
-        F2x: radiative forcing from a doubling of CO2.
-
-    Returns:
-        3-element array of radiative forcing: [F_CO2, F_CH4, F_N2O]
+    Args:
+        co2: instance of CO2 object
+        ch4: instance of CH4 object
+        n2o: instance of N2O object
     """
 
-    Cbar = 0.5 * (C[0] + Cpi[0])
-    Mbar = 0.5 * (C[1] + Cpi[1])
-    Nbar = 0.5 * (C[2] + Cpi[2])
-
-    # Tune the coefficient of CO2 forcing to acheive desired F2x, using 
-    # pre-industrial CO2 and N2O. F2x_etminan ~= 3.801.
-    F2x_etminan = (
-      -2.4e-7*Cpi[0]**2 + 7.2e-4*Cpi[0] - 2.1e-4*Cpi[2] + 5.36) * np.log(2)
-    scaleCO2 = F2x/F2x_etminan
-
-    F = np.zeros(3)
-    F[0] = (-2.4e-7*(C[0] - Cpi[0])**2 + 7.2e-4*np.fabs(C[0]-Cpi[0]) - \
-      2.1e-4 * Nbar + 5.36) * np.log(C[0]/Cpi[0]) * scaleCO2
-    F[1] = (-1.3e-6*Mbar - 8.2e-6*Nbar + 0.043) * (np.sqrt(C[1]) - \
-      np.sqrt(Cpi[1]))
-    F[2] = (-8.0e-6*Cbar + 4.2e-6*Nbar - 4.9e-6*Mbar + 0.117) * \
-      (np.sqrt(C[2]) - np.sqrt(Cpi[2]))
-
-    return F
+    cbar = 0.5*(co2.reference_concentration + co2.concentrations)
+    mbar = 0.5*(ch4.reference_concentration + ch4.concentrations)
+    nbar = 0.5*(n2o.reference_concentration + n2o.concentrations)
+    
+    # units really come into their own here
+    co2.effective_radiative_forcing = (
+        (-2.4e-7/unit.ppm**2*(co2.concentrations - co2.reference_concentration)**2
+         + 7.2e-4/unit.ppm*abs(co2.concentrations-co2.reference_concentration) 
+         - 2.1e-4/unit.ppb * nbar + 5.36) 
+        * np.log(co2.concentrations/co2.reference_concentration)
+    ) * unit.watt / unit.m**2
+    
+    ch4.effective_radiative_forcing = (
+        (-1.3e-6/unit.ppb*mbar - 8.2e-6/unit.ppb*nbar + 0.043) 
+        * (np.sqrt(ch4.concentrations/unit.ppb) - np.sqrt(ch4.reference_concentration/unit.ppb))
+    ) * unit.watt / unit.m**2
+    
+    n2o.effective_radiative_forcing = (
+        (-8.0e-6/unit.ppm*cbar + 4.2e-6/unit.ppb*nbar - 4.9e-6/unit.ppb*mbar + 0.117)
+        * (np.sqrt(n2o.concentrations/unit.ppb) - np.sqrt(n2o.reference_concentration/unit.ppb))
+    ) * unit.watt / unit.m**2
 
 
 def MN(M, N):
