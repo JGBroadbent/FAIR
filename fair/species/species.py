@@ -32,7 +32,7 @@ class GreenhouseGas(Species):
     """
 
     def __init__(self, radiative_efficiency, reference_concentration, 
-        concentration_t0, molecular_weight, name, efficacy=1):
+        concentration_t0, molecular_weight, lifetime, name, efficacy=1):
         """Initiator for GreenhouseGas class."""
         self.name = name
         self.efficacy = efficacy
@@ -40,6 +40,7 @@ class GreenhouseGas(Species):
         self.reference_concentration = reference_concentration
         self.concentration_t0        = concentration_t0
         self.molecular_weight        = molecular_weight
+        self.lifetime                = lifetime
         self.kg_to_vmr               = (
             molwt.AIR/self.molecular_weight / M_ATMOS * 1.0 * unit.vmr)
         #if name in library:   # pandas datatable of stats or a csv?
@@ -86,6 +87,15 @@ class GreenhouseGas(Species):
                 time_bounds = (np.arange(nt) + 0.5) * timestep
 # ERROR CHECKING: ensure sensible inputs
         self.time_bounds = time_bounds
+
+    def set_effective_radiative_forcing(self, effective_radiative_forcing):
+        """Sets effective radiative forcing of greenhouse gas.
+
+        Args:
+            effective_radiative_forcing: Quantity array of effective radiative
+                forcing.
+        """
+        self.effective_radiative_forcing = effective_radiative_forcing
         
     def set_lifetime(self, lifetime):
         """Sets atmospheric e-folding lifetime of greenhouse gas.
@@ -138,7 +148,125 @@ class GreenhouseGas(Species):
         self.effective_radiative_forcing.ito(unit.watt / unit.m**2)
 
 
+# move to a module
+def _calculate_alpha(cumulative_emissions, airborne_emissions, temperature, r0,
+        rC, rT, g0, g1, iirf_max = 97.0*unit.year):
+    """Calculate scaling value for CO2 time constants.
+
+    Args:
+        cumulative_emissions: Quantity of total CO2 emissions this timestep
+        airborne_emissions: Quantity of airborne CO2 emissions this timestep
+        temperature: Quantity of global mean near-surface air temperature
+        r0: Quantity of pre-industrial time-integrated airborne fraction
+        rC: Quantity of sensitivity in time-integrated airborne fraction with
+            total carbon in land and ocean sinks
+        rT: Quantity of sensitivity in time-integrated airborne fraction with
+            global mean temperature anomaly
+
+    Returns:
+        alpha: scaling factor for CO2 time constants.
+    """
+
+    iirf = r0 + rC * (cumulative_emissions-airborne_fraction) + rT * temperature
+    iirf = np.abs(iirf)  # not sure I understand this - it should never be negative
+    iirf = (iirf>iirf_max) * iirf_max + iirf * (iirf<iirf_max)
+    alpha = g0 * np.sinh(iirf / g1)
+    return alpha
+
+
+def _step_concentration(carbon_boxes0, emissions, alpha, a, tau, timestep,
+        concentration_t0, kg_to_vmr):
+    """Calculate concentrations of CO2 from emissions
+
+    Args:
+        carbon_boxes0: Quantity array of atmospheric CO2 boxes at previous
+            timestep.
+        emissions: Quantity of emissions of CO2 this timestep.
+        alpha: time constant scaling factor.
+        a: carbon boxes partitioning fraction.
+        tau: Quantity array of carbon boxes atmospheric time constants.
+        timestep: Quantity of time step
+        reference_concentration: reference concentration (pre-industrial)
+            of CO2.
+        kg_to_vmr: Quantity of unit conversion from kg CO2 to atmospheric
+            concentration.
+
+    Returns:
+        concentration: Quantity of CO2 concentration at end of timestep.
+        carbon_boxes1: Quantity array of atmospheric CO2 boxes at end of
+            timestep.
+        airborne_emissions: Quantity of atmospheric carbon store.
+    """
+    carbon_boxes1 = emissions * kg_to_vmr * a * alpha * (tau/timestep) * (1 - np.exp(-timestep/(alpha*tau))) + carbon_boxes0 * np.exp(-timestep/(alpha*tau))
+    concentration = concentration_t0 + (carbon_boxes1 + carbon_boxes0) / 2
+    airborne_emissions = np.sum(carbon_boxes0) / kg_to_vmr
+    return concentration, carbon_boxes1, airborne_emissions
+
+
 class CO2(GreenhouseGas):
+
+    def __init__(self, radiative_efficiency, reference_concentration,
+            concentration_t0, molecular_weight, lifetime, name, a, tau, r0, rC,
+            rT, efficacy=1, iirf_horizon=100*unit.year, iirf_max=97*unit.year):
+        super().__init__(radiative_efficiency, reference_concentration,
+            concentration_t0, molecular_weight, lifetime, name, efficacy=1)
+        self.a = a
+        self.tau = tau
+        self.r0 = r0
+        self.rC = rC
+        self.rT = rT
+        self.iirf_horizon = iirf_horizon
+        self.iirf_max = iirf_max
+
+    def calculate_concentrations(self):
+        """Calculates CO2 gas concentrations from emissions.
+
+        Args:
+            temperature: Quantity array of scenario temperature anomaly.
+        """
+
+        if hasattr(self.emissions, '__len__'):
+            nt = len(self.emissions) 
+            # ensures that either emissions or natural_emissions are array - 
+            # still need to check it is 1D
+            emissions = self.emissions
+        elif np.isscalar(self.emissions) and hasattr(self.time_points, '__len__'):
+            nt = len(self.time_points)
+            emissions = self.emissions * np.ones(nt)
+
+        # nothing here vectorised
+        g1 = np.sum(self.a * self.tau * (1 - (1 + self.iirf_horizon/self.tau)
+            * np.exp(-self.iirf_horizon/self.tau)), axis=-1)
+        g0 = 1/(np.sinh(np.sum(self.a * self.tau * (1 - 
+            np.exp(-self.iirf_horizon/self.tau)), axis=-1)/g1))
+        alpha1 = _calculate_alpha(cumulative_emissions)
+
+        concentrations = np.ones(nt+1) * np.nan * unit.vmr
+        #time_bounds = self.time_points - self.timestep/2
+        #time_bounds = np.append(time_bounds, self.time_points[-1] + self.timestep/2)
+        airborne_emissions = np.zeros(nt+1) * unit.Gt
+        alpha = np.ones(nt) * np.nan
+        concentrations[0] = self.concentration_t0
+        cumulative_emissions = np.cumsum(emissions)
+        carbon_boxes = np.zeros_like(self.a)
+
+        for t in range(nt):
+            alpha[t] = _calculate_alpha(cumulative_emissions[t], 
+                airborne_emissions[t], self.temperature[t], self.r0, self.rC, 
+                self.rT, g0, g1, iirf_max=self.iirf_max)        
+            concentrations[t+1], carbon_boxes, airborne_emissions[t+1] = (
+                _step_concentration(carbon_boxes, emissions[t], alpha[t], 
+                    self.a, self.tau, self.timestep,
+                    self.concentration_t0, self.kg_to_vmr)
+            )
+
+        self.alpha = alpha
+        self.concentrations = concentrations
+        self.time_bounds = time_bounds
+        self.cumulative_emissions = cumulative_emissions
+        self.airborne_emissions = airborne_emissions
+        self.airborne_fraction = airborne_emissions/cumulative_emissions
+
     def calculate_forcing(self, ch4, n2o):
         etminan(self, ch4, n2o)
 
