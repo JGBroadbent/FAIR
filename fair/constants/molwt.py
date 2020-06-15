@@ -4,7 +4,7 @@ from . import unit
 
 
 # all weights in g/mol
-CO2       = 44.01       * unit.g / unit.mol
+CO2       = 44.01
 CH4       = 16.04
 N2O       = 44.013
 CF4       = 88.0043
@@ -46,9 +46,4 @@ NO2       = 46.0055
 O3        = 48.0
 O2        = 31.9988
 
-AIR       = 28.97 * unit.g / unit.mol
-
-aslist    = [CO2, CH4, N2O, CF4, C2F6, C6F14, HFC23, HFC32, HFC43_10, HFC125,
-             HFC134A, HFC143A, HFC227EA, HFC245FA, SF6, CFC11, CFC12, CFC113,
-             CFC114, CFC115, CARB_TET, MCF, HCFC22, HCFC141B, HCFC142B,
-             HALON1211, HALON1202, HALON1301, HALON2402, CH3BR, CH3CL]
+AIR       = 28.97
